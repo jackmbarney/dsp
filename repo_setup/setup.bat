@@ -1,6 +1,9 @@
 @echo off
 REM Creates a virtual environment in .venv and installs dependencies from requirements.txt.
 
+REM Run from the repo root regardless of where this script was invoked from.
+cd /d "%~dp0\.."
+
 where python >nul 2>nul
 if errorlevel 1 (
     echo ERROR: python was not found on PATH. Install Python and try again.
@@ -24,6 +27,10 @@ if errorlevel 1 exit /b 1
 
 echo Installing dependencies from requirements.txt ...
 .venv\Scripts\python.exe -m pip install -r requirements.txt
+if errorlevel 1 exit /b 1
+
+echo Registering nbstripout git filter ...
+.venv\Scripts\nbstripout.exe --install
 if errorlevel 1 exit /b 1
 
 echo.

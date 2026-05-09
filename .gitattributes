@@ -1,0 +1,10 @@
+# Default: treat as text, normalize to LF in the repo, let autocrlf
+# decide line endings on checkout.
+* text=auto
+
+# Force LF for shell scripts so they remain executable on Linux/macOS
+# even if a clone happens via Windows.
+*.sh text eol=lf
+
+# Force CRLF for Windows batch files so cmd.exe parses them correctly.
+*.bat text eol=crlf
