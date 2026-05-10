@@ -164,6 +164,19 @@ def phase_to_rad(phase_val):
     return phase_val * np.pi / half_turn
 
 
+def build_title():
+    A = slider_amp.val
+    f_val = slider_freq.val
+    f_unit = FREQ_UNITS[freq_unit_idx[0]][0]
+    phi_val = slider_phase.val
+    phi_str = fmt_phase(phi_val)
+    p_unit = PHASE_UNITS[phase_unit_idx[0]][0]
+    return (
+        r"$y = A\sin(2\pi f\,t + \phi)$"
+        f"        $A={fmt(A)}$ V,   $f={fmt(f_val)}$ {f_unit},   $\\phi={phi_str}$ {p_unit}"
+    )
+
+
 def redraw():
     freq_hz = slider_freq.val * freq_factor()
     freq_for_window = max(freq_hz, LOW_FREQ_FLOOR * freq_factor())
@@ -174,6 +187,7 @@ def redraw():
     line.set_data(x, y)
     ax.set_xlim(0, x[-1] if x[-1] > 0 else 1)
     ax.set_xlabel(time_label())
+    ax.set_title(build_title(), fontsize=11)
     fig.canvas.draw_idle()
 
 
@@ -198,8 +212,50 @@ def link(slider, box, formatter=fmt, parser=float):
 
 
 link(slider_amp, box_amp)
-link(slider_freq, box_freq)
 link(slider_phase, box_phase, formatter=fmt_phase, parser=parse_phase)
+
+# Frequency box: custom handler that switches units on k / M / G suffix
+_FREQ_SUFFIX_MAP = {"k": 1, "M": 2, "G": 3}  # index into FREQ_UNITS
+
+
+def _on_freq_slider_change(_):
+    box_freq.set_val(fmt(slider_freq.val))
+    redraw()
+
+
+def _on_freq_box_submit(text):
+    text = text.strip()
+    target_unit_idx = None
+    numeric_text = text
+
+    if text and text[-1] in _FREQ_SUFFIX_MAP:
+        target_unit_idx = _FREQ_SUFFIX_MAP[text[-1]]
+        numeric_text = text[:-1]
+
+    try:
+        value = float(numeric_text)
+    except ValueError:
+        box_freq.set_val(fmt(slider_freq.val))
+        return
+
+    if target_unit_idx is not None and target_unit_idx != freq_unit_idx[0]:
+        # Convert the entered value (in the new unit) to the current unit so the
+        # slider stays consistent, then switch units.
+        new_factor = FREQ_UNITS[target_unit_idx][1]
+        old_factor = freq_factor()
+        freq_hz = value * new_factor          # absolute Hz
+        freq_unit_idx[0] = target_unit_idx
+        button_freq.label.set_text(FREQ_UNITS[freq_unit_idx[0]][0])
+        value = freq_hz / new_factor          # value expressed in new unit
+
+    value = max(slider_freq.valmin, min(slider_freq.valmax, value))
+    slider_freq.set_val(value)
+    box_freq.set_val(fmt(value))
+    redraw()
+
+
+slider_freq.on_changed(_on_freq_slider_change)
+box_freq.on_submit(_on_freq_box_submit)
 
 
 def cycle_freq_unit(_):
