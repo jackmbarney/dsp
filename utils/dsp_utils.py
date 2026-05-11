@@ -107,3 +107,83 @@ def zero_order_hold(t: np.ndarray, y: np.ndarray):
     if len(t) < 2:
         return np.array([]), np.array([])
     return np.repeat(t, 2)[1:], np.repeat(y, 2)[:-1]
+
+
+# ── noise generation ──────────────────────────────────────────────────────────
+def generate_noise(n: int, noise_type: str, amplitude: float = 1.0) -> np.ndarray:
+    """Generate noise arrays. noise_type: 'white' | 'pink' | 'gaussian'"""
+    if noise_type == "white":
+        return amplitude * (np.random.uniform(-1, 1, n))
+    elif noise_type == "pink":
+        # Voss-McCartney pink noise via FFT shaping
+        f  = np.fft.rfftfreq(n)
+        f[0] = 1  # avoid divide-by-zero at DC
+        spectrum = np.random.randn(len(f)) + 1j * np.random.randn(len(f))
+        spectrum /= np.sqrt(f)
+        spectrum[0] = 0  # zero DC
+        sig = np.fft.irfft(spectrum, n)
+        sig /= np.max(np.abs(sig) + 1e-12)
+        return amplitude * sig
+    elif noise_type == "gaussian":
+        return amplitude * np.random.randn(n)
+    return np.zeros(n)
+
+
+# ── preset waveforms ──────────────────────────────────────────────────────────
+def square_wave(t: np.ndarray, freq_hz: float, amplitude: float,
+                phase: float = 0.0, n_harmonics: int = 25) -> np.ndarray:
+    """Fourier-series square wave (sum of odd harmonics)."""
+    y = np.zeros_like(t)
+    for k in range(1, n_harmonics * 2, 2):
+        y += (4 / (np.pi * k)) * np.sin(2 * np.pi * k * freq_hz * t + phase)
+    return amplitude * y
+
+
+def sawtooth_wave(t: np.ndarray, freq_hz: float, amplitude: float,
+                  phase: float = 0.0, n_harmonics: int = 25) -> np.ndarray:
+    """Fourier-series sawtooth wave."""
+    y = np.zeros_like(t)
+    for k in range(1, n_harmonics + 1):
+        y += ((-1) ** (k + 1)) * (2 / (np.pi * k)) * np.sin(2 * np.pi * k * freq_hz * t + phase)
+    return amplitude * y
+
+
+def triangle_wave(t: np.ndarray, freq_hz: float, amplitude: float,
+                  phase: float = 0.0, n_harmonics: int = 25) -> np.ndarray:
+    """Fourier-series triangle wave (odd harmonics, alternating sign)."""
+    y = np.zeros_like(t)
+    for i, k in enumerate(range(1, n_harmonics * 2, 2)):
+        y += ((-1) ** i) * (8 / (np.pi ** 2 * k ** 2)) * np.sin(2 * np.pi * k * freq_hz * t + phase)
+    return amplitude * y
+
+
+# ── aliasing ──────────────────────────────────────────────────────────────────
+def aliased_frequency(signal_hz: float, sample_rate_hz: float) -> float:
+    """Return the aliased frequency when signal_hz is sampled at sample_rate_hz."""
+    # fold into [0, sr/2] using modulo
+    f_mod = signal_hz % sample_rate_hz
+    if f_mod > sample_rate_hz / 2:
+        f_mod = sample_rate_hz - f_mod
+    return f_mod
+
+
+def find_fft_peaks(freqs: np.ndarray, mag_dbm: np.ndarray,
+                   threshold_db: float = 20.0, min_hz: float = 0.5) -> list:
+    """
+    Return list of (freq_hz, mag_dbm) for significant peaks.
+    A peak is a local maximum above (global_peak - threshold_db).
+    """
+    if len(freqs) < 3:
+        return []
+    mask = (freqs >= min_hz) & np.isfinite(mag_dbm)
+    fa, ma = freqs[mask], mag_dbm[mask]
+    if not len(fa):
+        return []
+    peak_global = float(np.max(ma))
+    floor       = peak_global - threshold_db
+    # local maxima
+    peaks = []
+    for i in range(1, len(fa) - 1):
+        if ma[i] >= floor and ma[i] >= ma[i-1] and ma[i] >= ma[i+1]:
+            peaks.append((float(fa[i]), float(ma[i])))
+    return peaks
