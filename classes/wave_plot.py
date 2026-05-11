@@ -72,12 +72,7 @@ class WavePlotPanel(BasePlotPanel):
     def get_sampled_signal(self, t_sec: np.ndarray):
         if self._sample_rate_hz <= 0:
             return np.array([]), np.array([])
-        fhz = self.freq_hz()
-        if fhz > 0:
-            spp = max(4, int(round(self._sample_rate_hz / fhz)))
-            n   = max(N_SAMPLES, spp * 3)
-        else:
-            n   = max(2, int(round(self._sample_rate_hz * (t_sec[-1] - t_sec[0]))))
+        n   = max(2, int(round(self._sample_rate_hz * (t_sec[-1] - t_sec[0]))))
         t_s = np.linspace(t_sec[0], t_sec[-1], n, endpoint=False)
         return t_s, self._compute_signal(t_s)
 

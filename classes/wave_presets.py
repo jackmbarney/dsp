@@ -80,15 +80,10 @@ class _PresetWavePanel(BasePlotPanel):
             f"{self.WAVE_LABEL}   A={fmt(self._amp_row.value())} V   "
             f"f={fmt(self._freq_row.value())} {fu}")
 
-        # ADC overlay — use periods-based count so it never collapses at high freq
+        # ADC overlay
         sr = self._sample_rate_hz
         if sr > 0:
-            fhz = self.freq_hz()
-            if fhz > 0:
-                spp = max(4, int(round(sr / fhz)))
-                n_s = max(N_SAMPLES, spp * 3)
-            else:
-                n_s = max(2, int(round(sr * dur)))
+            n_s = max(2, int(round(sr * dur)))
             t_s = np.linspace(0, dur, n_s, endpoint=False)
             y_s = self._compute_signal(t_s)
             x_s = t_s * FREQ_UNITS[self._freq_unit_idx][1]

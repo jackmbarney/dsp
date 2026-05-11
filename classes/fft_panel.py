@@ -168,14 +168,9 @@ class FftPanel(QWidget):
         freqs_hz   = [p.freq_hz() for p in active]
         pos_freqs  = [f for f in freqs_hz if f > 0]
         lowest_hz  = max(min(pos_freqs, default=1.0), 0.01)
-        x_window   = 3.0 / lowest_hz          # seconds — 3 periods of lowest freq
-
-        # Always use MIX_SAMPLES points for continuous — frequency-independent density.
-        # For sampled: n_samp = samples_per_period * 3 periods, floored at MIX_SAMPLES
-        # so resolution never degrades at high frequencies.
-        samples_per_period = max(4, int(round(sr_hz / lowest_hz)))
-        n_samp    = max(MIX_SAMPLES, samples_per_period * 3)
-        actual_sr = n_samp / x_window         # true Hz for this window
+        x_window   = 3.0 / lowest_hz
+        n_samp     = max(2, int(round(sr_hz * x_window)))
+        actual_sr  = n_samp / x_window
 
         t_cont = np.linspace(0, x_window, MIX_SAMPLES, endpoint=False)
         t_samp = np.linspace(0, x_window, n_samp,      endpoint=False)
