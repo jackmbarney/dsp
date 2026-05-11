@@ -13,6 +13,7 @@ from utils.gui_utils        import PANEL_BG, EDGE, TEXT, MAX_WAVES, ADD_STYLE, R
 from classes.wave_plot      import WavePlotPanel
 from classes.noise_plot     import NoisePlotPanel
 from classes.wave_presets   import SquareWavePlot, SawtoothWavePlot, TriangleWavePlot
+from classes.pulse_plot     import PulsePlotPanel
 from classes.fft_panel      import FftPanel
 from classes.base_plot      import BasePlotPanel
 
@@ -110,6 +111,7 @@ class MainWindow(QMainWindow):
             ("⊿  Sawtooth Wave", lambda: self._add_panel(SawtoothWavePlot)),
             ("△  Triangle Wave", lambda: self._add_panel(TriangleWavePlot)),
             ("≋  Noise",         lambda: self._add_panel(NoisePlotPanel)),
+            ("⎍  Pulse",         lambda: self._add_panel(PulsePlotPanel)),
         ]:
             act = QAction(label, self)
             act.triggered.connect(fn)
