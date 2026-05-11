@@ -1,26 +1,30 @@
-"""SinWave: one sine wave plot panel with sliders, text boxes, unit buttons."""
+"""SinWavePanel – one sine-wave panel built with PyQt6 + pyqtgraph."""
 
 import ast
 import operator
 
 import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.widgets import Slider, TextBox, Button
+import pyqtgraph as pg
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout,
+    QSlider, QLineEdit, QPushButton, QLabel, QFrame,
+)
 
-# ── constants ────────────────────────────────────────────────────────────────
-AMP_UNIT   = "V"
+# ── constants ─────────────────────────────────────────────────────────────────
+AMP_UNIT    = "V"
 FREQ_UNITS  = [("Hz", 1.0, "s"), ("kHz", 1e3, "ms"), ("MHz", 1e6, "µs"), ("GHz", 1e9, "ns")]
 PHASE_UNITS = [
-    ("rad", 2 * np.pi, np.pi, "Phase (0–2π)"),
-    ("deg", 360.0,     180.0, "Phase (0–360°)"),
+    ("rad", 2 * np.pi, np.pi,  "Phase (0-2pi)"),
+    ("deg", 360.0,     180.0,  "Phase (0-360 deg)"),
 ]
 AMP_COLOR   = "#22d3ee"
 FREQ_COLOR  = "#fbbf24"
 PHASE_COLOR = "#f472b6"
-WIDGET_BG   = "black"
-WIDGET_HOVER= "#1a1a1a"
-WIDGET_EDGE = "white"
-WIDGET_TEXT = "white"
+BG          = "#0a0a0a"
+PANEL_BG    = "#111111"
+EDGE        = "#333333"
+TEXT        = "#e5e5e5"
 N_SAMPLES   = 2000
 VIEW_PERIODS= 3.0
 LOW_FREQ_FLOOR = 0.1
@@ -30,13 +34,46 @@ _ALLOWED_BINOPS = {
     ast.Mult: operator.mul, ast.Div: operator.truediv, ast.Pow: operator.pow,
 }
 _ALLOWED_UNARY = {ast.USub: operator.neg, ast.UAdd: operator.pos}
-_ALLOWED_NAMES = {"pi": np.pi, "π": np.pi}
-_FREQ_SUFFIX_MAP = {"k": 1, "M": 2, "G": 3}
+_ALLOWED_NAMES = {"pi": np.pi}
+_FREQ_SUFFIX   = {"k": 1, "M": 2, "G": 3}
+
+_BTN_STYLE = """
+    QPushButton {
+        background: #2a2a2a; color: #e5e5e5;
+        border: 1px solid #444; border-radius: 4px;
+        padding: 2px 8px; font-size: 11px;
+    }
+    QPushButton:hover { background: #3a3a3a; }
+    QPushButton:pressed { background: #1a1a1a; }
+"""
+_BOX_STYLE = """
+    QLineEdit {
+        background: #1a1a1a; color: #e5e5e5;
+        border: 1px solid #444; border-radius: 3px;
+        padding: 1px 4px; font-size: 11px;
+    }
+"""
+
+
+def _slider_style(color):
+    return f"""
+    QSlider::groove:horizontal {{
+        height: 4px; background: #333; border-radius: 2px;
+    }}
+    QSlider::handle:horizontal {{
+        width: 14px; height: 14px; margin: -5px 0;
+        border-radius: 7px; background: {color};
+    }}
+    QSlider::sub-page:horizontal {{
+        background: {color}; border-radius: 2px;
+    }}
+"""
 
 
 def _safe_eval(expr):
     def visit(node):
-        if isinstance(node, ast.Expression):           return visit(node.body)
+        if isinstance(node, ast.Expression):
+            return visit(node.body)
         if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
             return node.value
         if isinstance(node, ast.Name) and node.id in _ALLOWED_NAMES:
@@ -53,193 +90,286 @@ def _fmt(v):
     return f"{v:.3g}"
 
 
-def _outline(an_ax):
-    an_ax.set_facecolor(WIDGET_BG)
-    for sp in an_ax.spines.values():
-        sp.set_visible(True); sp.set_edgecolor(WIDGET_EDGE); sp.set_linewidth(1.2)
+def _fmt_phase(val, phase_unit_idx):
+    if PHASE_UNITS[phase_unit_idx][0] != "rad":
+        return _fmt(val)
+    if val == 0:
+        return "0"
+    pm = val / np.pi
+    if abs(pm - round(pm)) < 0.01:
+        n = int(round(pm))
+        return "pi" if n == 1 else f"{n}pi"
+    return f"{pm:.3g}pi"
 
 
-# ── class ─────────────────────────────────────────────────────────────────────
-class SinWave:
-    """
-    A self-contained sine-wave panel.
+class _ControlRow(QWidget):
+    """label | slider | textbox | unit-button"""
 
-    Parameters
-    ----------
-    fig        : matplotlib Figure
-    plot_rect  : [left, bottom, width, height]  – axes for the wave plot
-    widget_rect: [left, bottom, width, height]  – bounding box for the 3 widget rows
-    on_change  : optional callback called after every redraw
-    """
+    def __init__(self, label, sl_min, sl_max, sl_init, color, unit_text, parent=None):
+        super().__init__(parent)
+        self._min = sl_min
+        self._max = sl_max
+        self._steps = 2000
 
-    def __init__(self, fig, plot_rect, widget_rect, on_change=None):
-        self.fig = fig
-        self.on_change = on_change
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
 
-        # ── plot axes ────────────────────────────────────────────────────────
-        self.ax = fig.add_axes(plot_rect)
-        self.ax.set_facecolor("black")
-        self.ax.set_ylabel(f"Amplitude ({AMP_UNIT})")
-        self.ax.set_ylim(-2.5, 2.5)
-        self.ax.grid(True)
-        (self.line,) = self.ax.plot([], [], lw=1.5)
+        lbl = QLabel(label)
+        lbl.setFixedWidth(72)
+        lbl.setStyleSheet(f"color:{TEXT}; font-size:11px;")
+        lay.addWidget(lbl)
 
-        # ── internal state ───────────────────────────────────────────────────
+        self.slider = QSlider(Qt.Orientation.Horizontal)
+        self.slider.setRange(0, self._steps)
+        self.slider.setValue(self._to_int(sl_init))
+        self.slider.setStyleSheet(_slider_style(color))
+        self.slider.setFixedHeight(22)
+        lay.addWidget(self.slider, stretch=1)
+
+        self.box = QLineEdit()
+        self.box.setFixedWidth(72)
+        self.box.setStyleSheet(_BOX_STYLE)
+        lay.addWidget(self.box)
+
+        self.unit_btn = QPushButton(unit_text)
+        self.unit_btn.setFixedWidth(52)
+        self.unit_btn.setStyleSheet(_BTN_STYLE)
+        lay.addWidget(self.unit_btn)
+
+    def _to_int(self, v):
+        return int((v - self._min) / (self._max - self._min) * self._steps)
+
+    def value(self):
+        return self._min + self.slider.value() / self._steps * (self._max - self._min)
+
+    def set_value(self, v):
+        self.slider.setValue(self._to_int(max(self._min, min(self._max, v))))
+
+    def set_max(self, new_max):
+        self._max = new_max
+
+
+class SinWavePanel(QWidget):
+    """Self-contained sine-wave panel: plot + amplitude/frequency/phase controls."""
+
+    signal_changed = pyqtSignal()
+
+    def __init__(self, sample_rate_hz: float = 100.0, parent=None):
+        super().__init__(parent)
         self._freq_unit_idx  = 0
         self._phase_unit_idx = 0
+        self._guard          = False
+        self._sample_rate_hz = sample_rate_hz
 
-        # ── widget rows ───────────────────────────────────────────────────────
-        L, B, W, H = widget_rect          # bounding box
-        row_h   = 0.028
-        row_gap = 0.012
-        rows = [B + 2*(row_h + row_gap), B + (row_h + row_gap), B]  # amp, freq, phase
+        self.setStyleSheet(f"background:{PANEL_BG};")
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(6, 4, 6, 4)
+        outer.setSpacing(3)
 
-        def make_row(y):
-            sl_ax  = fig.add_axes([L,          y, W*0.50, row_h])
-            box_ax = fig.add_axes([L+W*0.52,   y, W*0.13, row_h])
-            btn_ax = fig.add_axes([L+W*0.67,   y, W*0.15, row_h])
-            return sl_ax, box_ax, btn_ax
+        # title
+        self._title = QLabel()
+        self._title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._title.setStyleSheet(f"color:{TEXT}; font-size:11px;")
+        outer.addWidget(self._title)
 
-        amp_sl_ax,   amp_box_ax,   amp_unit_ax   = make_row(rows[0])
-        freq_sl_ax,  freq_box_ax,  freq_unit_ax  = make_row(rows[1])
-        phase_sl_ax, phase_box_ax, phase_unit_ax = make_row(rows[2])
+        # plot
+        self._pw = pg.PlotWidget(background=BG)
+        self._pw.showGrid(x=True, y=True, alpha=0.25)
+        self._pw.setLabel("left",   f"Amplitude ({AMP_UNIT})", color=TEXT)
+        self._pw.setLabel("bottom", "Time (s)",                color=TEXT)
+        self._pw.setYRange(-2.5, 2.5)
+        self._pw.getAxis("left").setTextPen(TEXT)
+        self._pw.getAxis("bottom").setTextPen(TEXT)
+        self._pw.setMouseEnabled(x=False, y=False)
+        self._pw.getPlotItem().getViewBox().setMenuEnabled(False)
+        self._pw.getPlotItem().setMenuEnabled(False)
+        # continuous blue line
+        self._curve = self._pw.plot(pen=pg.mkPen("#3b82f6", width=1.5))
+        # red sample dots + step-hold approximation
+        self._sample_dots  = self._pw.plot(pen=None,
+                                            symbol='o', symbolSize=6,
+                                            symbolBrush=pg.mkBrush("#ef4444"),
+                                            symbolPen=pg.mkPen(None))
+        self._sample_curve = self._pw.plot(pen=pg.mkPen("#ef4444", width=1.5,
+                                                         style=Qt.PenStyle.SolidLine))
+        outer.addWidget(self._pw, stretch=1)
 
-        # sliders
-        self.sl_amp = Slider(amp_sl_ax,   "Amplitude", 0.0,   2.0,   valinit=1.0,
-                             color=AMP_COLOR,   track_color=WIDGET_BG, initcolor="none")
-        self.sl_freq= Slider(freq_sl_ax,  "Frequency", 0.0, 100.0,   valinit=1.0,
-                             color=FREQ_COLOR,  track_color=WIDGET_BG, initcolor="none")
-        self.sl_phase=Slider(phase_sl_ax, PHASE_UNITS[0][3], 0.0, PHASE_UNITS[0][1],
-                             valinit=0.0,
-                             color=PHASE_COLOR, track_color=WIDGET_BG, initcolor="none")
-        for s in (self.sl_amp, self.sl_freq, self.sl_phase):
-            s.valtext.set_visible(False); _outline(s.ax)
+        # separator
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"color:{EDGE};")
+        outer.addWidget(sep)
 
-        # text boxes
-        self.box_amp  = TextBox(amp_box_ax,   "", initial=_fmt(1.0), color=WIDGET_BG, hovercolor=WIDGET_HOVER)
-        self.box_freq = TextBox(freq_box_ax,  "", initial=_fmt(1.0), color=WIDGET_BG, hovercolor=WIDGET_HOVER)
-        self.box_phase= TextBox(phase_box_ax, "", initial="0",        color=WIDGET_BG, hovercolor=WIDGET_HOVER)
-        for b in (self.box_amp, self.box_freq, self.box_phase):
-            for sp in b.ax.spines.values():
-                sp.set_visible(True); sp.set_edgecolor(WIDGET_EDGE); sp.set_linewidth(1.2)
-            b.text_disp.set_color(WIDGET_TEXT); b.cursor.set_color(WIDGET_TEXT)
+        # control rows
+        self._amp_row   = _ControlRow("Amplitude", 0.0,   2.0,              1.0, AMP_COLOR,   AMP_UNIT)
+        self._freq_row  = _ControlRow("Frequency", 0.0, 100.0,              1.0, FREQ_COLOR,  FREQ_UNITS[0][0])
+        self._phase_row = _ControlRow("Phase",     0.0, PHASE_UNITS[0][1],  0.0, PHASE_COLOR, PHASE_UNITS[0][0])
 
-        # unit labels / buttons
-        amp_unit_ax.axis("off")
-        amp_unit_ax.text(0.05, 0.5, AMP_UNIT, ha="left", va="center",
-                         transform=amp_unit_ax.transAxes, color=WIDGET_TEXT)
+        self._amp_row.unit_btn.setEnabled(False)
+        self._amp_row.unit_btn.setStyleSheet(_BTN_STYLE + "QPushButton{color:#666;border-color:#333;}")
 
-        self.btn_freq  = Button(freq_unit_ax,  FREQ_UNITS[0][0],  color="#444", hovercolor="#666")
-        self.btn_phase = Button(phase_unit_ax, PHASE_UNITS[0][0], color="#444", hovercolor="#666")
+        for row in (self._amp_row, self._freq_row, self._phase_row):
+            outer.addWidget(row)
 
-        # ── wire up ───────────────────────────────────────────────────────────
-        self._link_amp()
-        self._link_phase()
-        self._link_freq()
-        self.btn_freq.on_clicked(self._cycle_freq_unit)
-        self.btn_phase.on_clicked(self._cycle_phase_unit)
+        self._amp_row.box.setText(_fmt(1.0))
+        self._freq_row.box.setText(_fmt(1.0))
+        self._phase_row.box.setText("0")
+
+        # signals
+        self._amp_row.slider.valueChanged.connect(self._on_amp_sl)
+        self._amp_row.box.returnPressed.connect(self._on_amp_box)
+        self._freq_row.slider.valueChanged.connect(self._on_freq_sl)
+        self._freq_row.box.returnPressed.connect(self._on_freq_box)
+        self._freq_row.unit_btn.clicked.connect(self._cycle_freq)
+        self._phase_row.slider.valueChanged.connect(self._on_phase_sl)
+        self._phase_row.box.returnPressed.connect(self._on_phase_box)
+        self._phase_row.unit_btn.clicked.connect(self._cycle_phase)
 
         self._redraw()
 
+    # ── public API ────────────────────────────────────────────────────────────
+    def set_sample_rate(self, hz: float):
+        self._sample_rate_hz = hz
+        self._redraw()
+
+    def get_signal(self, t_sec: np.ndarray) -> np.ndarray:
+        freq_hz = self._freq_row.value() * self._freq_factor()
+        phase   = self._phase_to_rad(self._phase_row.value())
+        return self._amp_row.value() * np.sin(2 * np.pi * freq_hz * t_sec + phase)
+
+    def get_sampled_signal(self, t_sec: np.ndarray):
+        """Return (t_samples, y_samples) of the ADC-sampled version."""
+        if self._sample_rate_hz <= 0:
+            return np.array([]), np.array([])
+        duration = float(t_sec[-1] - t_sec[0]) if len(t_sec) > 1 else 1.0
+        n_samp   = max(2, int(round(self._sample_rate_hz * duration)))
+        t_s      = np.linspace(t_sec[0], t_sec[-1], n_samp, endpoint=False)
+        y_s      = self.get_signal(t_s)
+        return t_s, y_s
+
     # ── helpers ───────────────────────────────────────────────────────────────
-    def _freq_factor(self):   return FREQ_UNITS[self._freq_unit_idx][1]
-    def _time_label(self):    return f"Time ({FREQ_UNITS[self._freq_unit_idx][2]})"
-    def _phase_to_rad(self, v):
-        return v * np.pi / PHASE_UNITS[self._phase_unit_idx][2]
-
-    def _fmt_phase(self, val):
-        if PHASE_UNITS[self._phase_unit_idx][0] != "rad":
-            return _fmt(val)
-        if val == 0: return "0"
-        pm = val / np.pi
-        if abs(pm - round(pm)) < 0.01:
-            n = int(round(pm))
-            return "π" if n == 1 else f"{n}π"
-        return f"{pm:.3g}π"
-
-    def _parse_phase(self, text):
-        if PHASE_UNITS[self._phase_unit_idx][0] == "rad":
-            return float(_safe_eval(text))
-        return float(text)
+    def _freq_factor(self): return FREQ_UNITS[self._freq_unit_idx][1]
+    def _phase_half(self):  return PHASE_UNITS[self._phase_unit_idx][2]
+    def _phase_to_rad(self, v): return v * np.pi / self._phase_half()
+    def _fmt_ph(self, v): return _fmt_phase(v, self._phase_unit_idx)
 
     def _build_title(self):
         f_unit = FREQ_UNITS[self._freq_unit_idx][0]
         p_unit = PHASE_UNITS[self._phase_unit_idx][0]
-        phi_str = self._fmt_phase(self.sl_phase.val)
-        return (
-            r"$y = A\sin(2\pi f\,t + \phi)$"
-            f"        $A={_fmt(self.sl_amp.val)}$ V,"
-            f"   $f={_fmt(self.sl_freq.val)}$ {f_unit},"
-            f"   $\\phi={phi_str}$ {p_unit}"
-        )
+        return (f"y = A * sin(2*pi*f*t + phi)     "
+                f"A = {_fmt(self._amp_row.value())} V,   "
+                f"f = {_fmt(self._freq_row.value())} {f_unit},   "
+                f"phi = {self._fmt_ph(self._phase_row.value())} {p_unit}")
 
     def _redraw(self):
-        freq_hz  = self.sl_freq.val * self._freq_factor()
+        freq_hz  = self._freq_row.value() * self._freq_factor()
         f_window = max(freq_hz, LOW_FREQ_FLOOR * self._freq_factor())
         dur      = VIEW_PERIODS / f_window
         t        = np.linspace(0, dur, N_SAMPLES, endpoint=False)
-        y        = self.sl_amp.val * np.sin(2*np.pi*freq_hz*t + self._phase_to_rad(self.sl_phase.val))
-        x        = t * self._freq_factor()
-        self.line.set_data(x, y)
-        self.ax.set_xlim(0, x[-1] if x[-1] > 0 else 1)
-        self.ax.set_xlabel(self._time_label())
-        self.ax.set_title(self._build_title(), fontsize=9)
-        self.fig.canvas.draw_idle()
-        if self.on_change:
-            self.on_change()
+        y        = self._amp_row.value() * np.sin(
+                       2*np.pi*freq_hz*t + self._phase_to_rad(self._phase_row.value()))
+        x = t * self._freq_factor()
+        self._curve.setData(x, y)
+        self._pw.setXRange(0, float(x[-1]) if x[-1] > 0 else 1.0, padding=0)
+        self._pw.setLabel("bottom", f"Time ({FREQ_UNITS[self._freq_unit_idx][2]})", color=TEXT)
+        self._title.setText(self._build_title())
 
-    # ── wiring ────────────────────────────────────────────────────────────────
-    def _link_amp(self):
-        def on_sl(_):
-            self.box_amp.set_val(_fmt(self.sl_amp.val)); self._redraw()
-        def on_box(text):
-            try:   v = float(text)
-            except: self.box_amp.set_val(_fmt(self.sl_amp.val)); return
-            self.sl_amp.set_val(max(self.sl_amp.valmin, min(self.sl_amp.valmax, v)))
-        self.sl_amp.on_changed(on_sl); self.box_amp.on_submit(on_box)
+        # ADC samples on this panel's time axis
+        t_s, y_s = self.get_sampled_signal(t)
+        x_s = t_s * self._freq_factor()
+        self._sample_dots.setData(x_s, y_s)
 
-    def _link_phase(self):
-        def on_sl(_):
-            self.box_phase.set_val(self._fmt_phase(self.sl_phase.val)); self._redraw()
-        def on_box(text):
-            try:   v = self._parse_phase(text)
-            except: self.box_phase.set_val(self._fmt_phase(self.sl_phase.val)); return
-            self.sl_phase.set_val(max(self.sl_phase.valmin, min(self.sl_phase.valmax, v)))
-        self.sl_phase.on_changed(on_sl); self.box_phase.on_submit(on_box)
+        # zero-order hold: step from each sample to the next
+        if len(t_s) > 1:
+            t_hold = np.repeat(t_s, 2)[1:]
+            y_hold = np.repeat(y_s, 2)[:-1]
+            self._sample_curve.setData(t_hold * self._freq_factor(), y_hold)
+        else:
+            self._sample_curve.setData([], [])
 
-    def _link_freq(self):
-        def on_sl(_):
-            self.box_freq.set_val(_fmt(self.sl_freq.val)); self._redraw()
+        self.signal_changed.emit()
 
-        def on_box(text):
-            text = text.strip(); target = None; num = text
-            if text and text[-1] in _FREQ_SUFFIX_MAP:
-                target = _FREQ_SUFFIX_MAP[text[-1]]; num = text[:-1]
-            try:   value = float(num)
-            except: self.box_freq.set_val(_fmt(self.sl_freq.val)); return
-            if target is not None and target != self._freq_unit_idx:
-                new_factor = FREQ_UNITS[target][1]
-                freq_hz    = value * new_factor
-                self._freq_unit_idx = target
-                self.btn_freq.label.set_text(FREQ_UNITS[target][0])
-                value = freq_hz / new_factor
-            value = max(self.sl_freq.valmin, min(self.sl_freq.valmax, value))
-            self.sl_freq.set_val(value); self.box_freq.set_val(_fmt(value)); self._redraw()
-
-        self.sl_freq.on_changed(on_sl); self.box_freq.on_submit(on_box)
-
-    def _cycle_freq_unit(self, _):
-        self._freq_unit_idx = (self._freq_unit_idx + 1) % len(FREQ_UNITS)
-        self.btn_freq.label.set_text(FREQ_UNITS[self._freq_unit_idx][0])
+    # ── amplitude ─────────────────────────────────────────────────────────────
+    def _on_amp_sl(self):
+        if self._guard: return
+        self._guard = True
+        self._amp_row.box.setText(_fmt(self._amp_row.value()))
+        self._guard = False
         self._redraw()
 
-    def _cycle_phase_unit(self, _):
-        cur_rad = self._phase_to_rad(self.sl_phase.val)
+    def _on_amp_box(self):
+        try:   v = float(self._amp_row.box.text())
+        except: self._amp_row.box.setText(_fmt(self._amp_row.value())); return
+        self._guard = True
+        self._amp_row.set_value(v)
+        self._guard = False
+        self._redraw()
+
+    # ── frequency ─────────────────────────────────────────────────────────────
+    def _on_freq_sl(self):
+        if self._guard: return
+        self._guard = True
+        self._freq_row.box.setText(_fmt(self._freq_row.value()))
+        self._guard = False
+        self._redraw()
+
+    def _on_freq_box(self):
+        text = self._freq_row.box.text().strip()
+        target = None; num = text
+        if text and text[-1] in _FREQ_SUFFIX:
+            target = _FREQ_SUFFIX[text[-1]]; num = text[:-1]
+        try:   value = float(num)
+        except: self._freq_row.box.setText(_fmt(self._freq_row.value())); return
+        if target is not None and target != self._freq_unit_idx:
+            freq_hz = value * FREQ_UNITS[target][1]
+            self._freq_unit_idx = target
+            self._freq_row.unit_btn.setText(FREQ_UNITS[target][0])
+            value = freq_hz / FREQ_UNITS[target][1]
+        value = max(0.0, min(100.0, value))
+        self._guard = True
+        self._freq_row.set_value(value)
+        self._freq_row.box.setText(_fmt(value))
+        self._guard = False
+        self._redraw()
+
+    def _cycle_freq(self):
+        self._freq_unit_idx = (self._freq_unit_idx + 1) % len(FREQ_UNITS)
+        self._freq_row.unit_btn.setText(FREQ_UNITS[self._freq_unit_idx][0])
+        self._redraw()
+
+    # ── phase ─────────────────────────────────────────────────────────────────
+    def _on_phase_sl(self):
+        if self._guard: return
+        self._guard = True
+        self._phase_row.box.setText(self._fmt_ph(self._phase_row.value()))
+        self._guard = False
+        self._redraw()
+
+    def _on_phase_box(self):
+        text = self._phase_row.box.text()
+        try:
+            if PHASE_UNITS[self._phase_unit_idx][0] == "rad":
+                v = float(_safe_eval(text))
+            else:
+                v = float(text)
+        except:
+            self._phase_row.box.setText(self._fmt_ph(self._phase_row.value())); return
+        pu = PHASE_UNITS[self._phase_unit_idx]
+        self._guard = True
+        self._phase_row.set_value(max(0.0, min(pu[1], v)))
+        self._guard = False
+        self._redraw()
+
+    def _cycle_phase(self):
+        cur_rad = self._phase_to_rad(self._phase_row.value())
         self._phase_unit_idx = (self._phase_unit_idx + 1) % len(PHASE_UNITS)
         pu = PHASE_UNITS[self._phase_unit_idx]
         new_val = max(0.0, min(pu[1], cur_rad * pu[2] / np.pi))
-        self.sl_phase.valmax = pu[1]
-        self.sl_phase.ax.set_xlim(0.0, pu[1])
-        self.sl_phase.label.set_text(pu[3])
-        self.sl_phase.set_val(new_val)
-        self.btn_phase.label.set_text(pu[0])
+        self._phase_row.set_max(pu[1])
+        self._phase_row.unit_btn.setText(pu[0])
+        self._guard = True
+        self._phase_row.set_value(new_val)
+        self._phase_row.box.setText(self._fmt_ph(new_val))
+        self._guard = False
+        self._redraw()
